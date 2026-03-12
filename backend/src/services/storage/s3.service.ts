@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../../utils/logger';
 
 export class S3Service {
@@ -12,76 +13,48 @@ export class S3Service {
     this.bucketName = process.env.S3_BUCKET_NAME || 'pil-documents';
   }
 
-  async uploadDocument(buffer: Buffer, key: string): Promise<string> {
+  /**
+   * Upload file to S3
+   */
+  async uploadFile(
+    key: string,
+    body: Buffer,
+    contentType: string
+  ): Promise<string> {
     try {
-      await this.s3Client.send(
-        new PutObjectCommand({
-          Bucket: this.bucketName,
-          Key: key,
-          Body: buffer,
-          ContentType: 'application/pdf',
-        })
-      );
-
-      const path = `s3://${this.bucketName}/${key}`;
-      logger.info('Document uploaded to S3', { path });
-      return path;
-    } catch (error) {
-      logger.error('S3 upload failed', {
-        key,
-        error: error instanceof Error ? error.message : 'Unknown error',
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
       });
+
+      await this.s3Client.send(command);
+
+      logger.info('File uploaded to S3', { key, contentType });
+
+      return key;
+    } catch (error) {
+      logger.error('Failed to upload file to S3', { error, key });
       throw error;
     }
   }
 
-  async uploadJSON(data: any, key: string): Promise<string> {
+  /**
+   * Get presigned URL for file download
+   */
+  async getPresignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
     try {
-      const buffer = Buffer.from(JSON.stringify(data, null, 2));
-      
-      await this.s3Client.send(
-        new PutObjectCommand({
-          Bucket: this.bucketName,
-          Key: key,
-          Body: buffer,
-          ContentType: 'application/json',
-        })
-      );
-
-      const path = `s3://${this.bucketName}/${key}`;
-      logger.info('JSON uploaded to S3', { path });
-      return path;
-    } catch (error) {
-      logger.error('S3 JSON upload failed', {
-        key,
-        error: error instanceof Error ? error.message : 'Unknown error',
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
       });
-      throw error;
-    }
-  }
 
-  async downloadDocument(path: string): Promise<Buffer> {
-    try {
-      const key = path.replace(`s3://${this.bucketName}/`, '');
-      
-      const response = await this.s3Client.send(
-        new GetObjectCommand({
-          Bucket: this.bucketName,
-          Key: key,
-        })
-      );
+      const url = await getSignedUrl(this.s3Client, command, { expiresIn });
 
-      const chunks: Uint8Array[] = [];
-      for await (const chunk of response.Body as any) {
-        chunks.push(chunk);
-      }
-
-      return Buffer.concat(chunks);
+      return url;
     } catch (error) {
-      logger.error('S3 download failed', {
-        path,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+      logger.error('Failed to generate presigned URL', { error, key });
       throw error;
     }
   }
